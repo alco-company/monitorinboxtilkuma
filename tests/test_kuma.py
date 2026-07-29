@@ -76,6 +76,8 @@ def test_build_push_monitor_payload_creates_push_monitor_defaults() -> None:
     assert payload["name"] == "Synology Backup - ABB Teksam-Default @ adslthi.alco.dk"
     assert payload["interval"] == 93600
     assert payload["retryInterval"] == 600
+    assert payload["tags"] == []
+    assert payload["maintenance"] is False
     assert payload["conditions"] == "[]"
 
 
