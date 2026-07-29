@@ -51,8 +51,6 @@ def build_push_monitor_payload(settings: Settings, *, monitor_name: str, descrip
         "maxretries": settings.kuma_monitor_max_retries,
         "active": True,
         "notificationIDList": {},
-        "tags": [],
-        "maintenance": False,
         "accepted_statuscodes": ["200-299"],
         "conditions": [],
     }
