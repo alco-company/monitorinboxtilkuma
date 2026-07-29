@@ -121,12 +121,13 @@ class KumaProvisioner:
             monitor = self._find_monitor_by_name(monitor_name)
             expected_push_token = build_push_token(self._settings, monitor_name)
             if monitor is None:
-                self._create_monitor(
+                monitor_id = self._create_monitor(
                     sio,
                     monitor_name=monitor_name,
                     description=description,
                     push_token=expected_push_token,
                 )
+                self._apply_monitor_tags(sio, monitor_id)
                 return build_kuma_push_url(base_url, expected_push_token)
             else:
                 if monitor.get("type") != "push":
@@ -224,6 +225,15 @@ class KumaProvisioner:
             raise RuntimeError(f"Uptime Kuma returned an invalid response for event '{event}': {response!r}")
         return response
 
+    def _call_without_payload(self, sio: socketio.Client, event: str) -> Dict[str, Any]:
+        try:
+            response = sio.call(event, timeout=self._settings.kuma_timeout_seconds)
+        except socketio.exceptions.TimeoutError as exc:
+            raise RuntimeError(f"Timed out while calling Uptime Kuma event '{event}'.") from exc
+        if not isinstance(response, dict):
+            raise RuntimeError(f"Uptime Kuma returned an invalid response for event '{event}': {response!r}")
+        return response
+
     def _create_monitor(
         self,
         sio: socketio.Client,
@@ -246,6 +256,38 @@ class KumaProvisioner:
         if monitor_id is None:
             raise RuntimeError(f"Kuma monitor creation succeeded but returned no monitor id: {response}")
         return int(monitor_id)
+
+    def _apply_monitor_tags(self, sio: socketio.Client, monitor_id: int) -> None:
+        if not self._settings.kuma_monitor_tags:
+            return
+
+        response = self._call_without_payload(sio, "getTags")
+        if not response.get("ok"):
+            raise RuntimeError(f"Failed to fetch Kuma tags: {response}")
+
+        tags = response.get("tags")
+        if not isinstance(tags, list):
+            raise RuntimeError(f"Kuma returned an invalid tag list: {response}")
+
+        tags_by_name = {
+            str(tag.get("name")).casefold(): tag
+            for tag in tags
+            if isinstance(tag, dict) and tag.get("name") and tag.get("id") is not None
+        }
+
+        for tag_name in self._settings.kuma_monitor_tags:
+            tag = tags_by_name.get(tag_name.casefold())
+            if tag is None:
+                LOGGER.warning("Kuma tag '%s' was not found, so it could not be attached to monitor %s.", tag_name, monitor_id)
+                continue
+
+            response = self._call_with_timeout(
+                sio,
+                "addMonitorTag",
+                (int(tag["id"]), monitor_id, ""),
+            )
+            if not response.get("ok"):
+                raise RuntimeError(f"Failed to attach Kuma tag '{tag_name}' to monitor {monitor_id}: {response}")
 
     def _get_monitor(self, sio: socketio.Client, monitor_id: int) -> Dict[str, Any]:
         response = sio.call("getMonitor", monitor_id, timeout=self._settings.kuma_timeout_seconds)

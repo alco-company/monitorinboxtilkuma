@@ -31,6 +31,7 @@ def make_settings(state_path: Path) -> Settings:
         kuma_auto_create_monitor=False,
         kuma_monitor_name_template="Synology Backup - {job_name}",
         kuma_monitor_description_template=None,
+        kuma_monitor_tags=["Backup"],
         kuma_monitor_interval_seconds=93600,
         kuma_monitor_retry_interval_seconds=600,
         kuma_monitor_resend_interval_seconds=0,

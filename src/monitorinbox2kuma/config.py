@@ -107,6 +107,7 @@ class Settings:
     kuma_auto_create_monitor: bool
     kuma_monitor_name_template: str
     kuma_monitor_description_template: Optional[str]
+    kuma_monitor_tags: List[str]
     kuma_monitor_interval_seconds: int
     kuma_monitor_retry_interval_seconds: int
     kuma_monitor_resend_interval_seconds: int
@@ -158,6 +159,11 @@ def load_settings(*, once: bool = False) -> Settings:
         "KUMA_MONITOR_NAME_TEMPLATE",
         os.getenv("KUMA_MONITOR_NAME", "Synology Backup - {job_name}"),
     ).strip()
+    kuma_monitor_tags = [
+        item.strip()
+        for item in os.getenv("KUMA_MONITOR_TAGS", "Backup").split(",")
+        if item.strip()
+    ]
     kuma_monitor_interval_seconds = int(os.getenv("KUMA_MONITOR_INTERVAL_SECONDS", "93600"))
     kuma_monitor_retry_interval_seconds = int(os.getenv("KUMA_MONITOR_RETRY_INTERVAL_SECONDS", "600"))
     kuma_monitor_resend_interval_seconds = int(os.getenv("KUMA_MONITOR_RESEND_INTERVAL_SECONDS", "0"))
@@ -218,6 +224,7 @@ def load_settings(*, once: bool = False) -> Settings:
         kuma_monitor_name_template=kuma_monitor_name_template,
         kuma_monitor_description_template=_optional_env("KUMA_MONITOR_DESCRIPTION_TEMPLATE")
         or _optional_env("KUMA_MONITOR_DESCRIPTION"),
+        kuma_monitor_tags=kuma_monitor_tags,
         kuma_monitor_interval_seconds=kuma_monitor_interval_seconds,
         kuma_monitor_retry_interval_seconds=kuma_monitor_retry_interval_seconds,
         kuma_monitor_resend_interval_seconds=kuma_monitor_resend_interval_seconds,

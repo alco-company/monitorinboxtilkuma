@@ -33,6 +33,7 @@ def make_settings() -> Settings:
         kuma_auto_create_monitor=True,
         kuma_monitor_name_template="Synology Backup - {job_name}",
         kuma_monitor_description_template="Managed by monitorinbox2kuma for {job_name}",
+        kuma_monitor_tags=["Backup"],
         kuma_monitor_interval_seconds=93600,
         kuma_monitor_retry_interval_seconds=600,
         kuma_monitor_resend_interval_seconds=0,
@@ -146,6 +147,37 @@ class FakeSocket:
         return None
 
 
+class FakeCreateSocket:
+    def __init__(self):
+        self.handlers = {}
+        self.calls = []
+
+    def on(self, event):
+        def decorator(func):
+            self.handlers[event] = func
+            return func
+        return decorator
+
+    def connect(self, *args, **kwargs):
+        monitor_list_handler = self.handlers["monitorList"]
+        monitor_list_handler({})
+
+    def call(self, event, payload=None, timeout=None):
+        self.calls.append((event, payload))
+        if event == "loginByToken":
+            return {"ok": True}
+        if event == "add":
+            return {"ok": True, "monitorID": 11}
+        if event == "getTags":
+            return {"ok": True, "tags": [{"id": 4, "name": "Backup", "color": "#008000"}]}
+        if event == "addMonitorTag":
+            return {"ok": True}
+        raise AssertionError(f"Unexpected event: {event}")
+
+    def disconnect(self):
+        return None
+
+
 def test_existing_monitor_falls_back_to_deterministic_push_token_when_missing_from_kuma_response() -> None:
     settings = make_settings()
     provisioner = KumaProvisioner(settings, socket_factory=lambda **kwargs: FakeSocket())
@@ -159,3 +191,21 @@ def test_existing_monitor_falls_back_to_deterministic_push_token_when_missing_fr
         settings.kuma_base_url,
         build_push_token(settings, "Synology 365 backupopgaven ALCO 365"),
     )
+
+
+def test_new_monitor_gets_backup_tag_attached() -> None:
+    settings = make_settings()
+    fake_socket = FakeCreateSocket()
+    provisioner = KumaProvisioner(settings, socket_factory=lambda **kwargs: fake_socket)
+
+    push_url = provisioner.ensure_push_monitor(
+        monitor_name="Synology 365 backupopgaven ALCO 365",
+        description=None,
+    )
+
+    assert push_url == build_kuma_push_url(
+        settings.kuma_base_url,
+        build_push_token(settings, "Synology 365 backupopgaven ALCO 365"),
+    )
+    assert ("getTags", None) in fake_socket.calls
+    assert ("addMonitorTag", (4, 11, "")) in fake_socket.calls
