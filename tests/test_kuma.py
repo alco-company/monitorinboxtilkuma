@@ -78,7 +78,8 @@ def test_build_push_monitor_payload_creates_push_monitor_defaults() -> None:
     assert payload["retryInterval"] == 600
     assert payload["tags"] == []
     assert payload["maintenance"] is False
-    assert payload["conditions"] == "[]"
+    assert payload["accepted_statuscodes"] == ["200-299"]
+    assert payload["conditions"] == []
 
 
 def test_render_monitor_name_uses_job_name_template() -> None:

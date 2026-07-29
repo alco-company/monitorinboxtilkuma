@@ -53,8 +53,8 @@ def build_push_monitor_payload(settings: Settings, *, monitor_name: str, descrip
         "notificationIDList": {},
         "tags": [],
         "maintenance": False,
-        "accepted_statuscodes_json": "[\"200-299\"]",
-        "conditions": "[]",
+        "accepted_statuscodes": ["200-299"],
+        "conditions": [],
     }
     return payload
 
