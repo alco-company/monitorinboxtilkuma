@@ -23,3 +23,21 @@ def test_load_settings_lists_all_missing_required_variables(monkeypatch) -> None
     assert "M365_CLIENT_SECRET" in message
     assert "M365_MAILBOX" in message
     assert ".env.example" in message
+
+
+def test_load_settings_parses_multiple_allowed_senders_from_csv(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("M365_TENANT_ID", "tenant")
+    monkeypatch.setenv("M365_CLIENT_ID", "client")
+    monkeypatch.setenv("M365_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("M365_MAILBOX", "monitor@al.dk")
+    monkeypatch.setenv("KUMA_PUSH_URL", "https://kuma.example.com/api/push/token")
+    monkeypatch.setenv("M365_ALLOWED_SENDERS", " Monitor@PBox.dk, alerts@synology.local ,third@example.com ")
+    monkeypatch.setenv("STATE_FILE", str(tmp_path / "state.json"))
+
+    settings = load_settings()
+
+    assert settings.allowed_senders == [
+        "monitor@pbox.dk",
+        "alerts@synology.local",
+        "third@example.com",
+    ]

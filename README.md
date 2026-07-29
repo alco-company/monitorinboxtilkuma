@@ -94,7 +94,7 @@ If you prefer, you can still use `KUMA_USERNAME` and `KUMA_PASSWORD` instead of 
 Example with more realistic Synology patterns:
 
 ```env
-M365_ALLOWED_SENDERS=monitor@pbox.dk
+M365_ALLOWED_SENDERS=monitor@pbox.dk,alerts@synology.local
 SUCCESS_PATTERNS=["completed successfully","er fuldført","completed backup of"]
 FAILURE_PATTERNS=["delvist gennemført","\\bfailed\\b","\\berror\\b","destination disk is full","backup task.*aborted"]
 ```
