@@ -116,10 +116,10 @@ def test_service_keeps_running_after_cycle_error_in_daemon_mode(tmp_path, monkey
     class StopLoop(Exception):
         pass
 
-    def stop_sleep(seconds: int) -> None:
+    def stop_wait() -> bool:
         raise StopLoop()
 
-    monkeypatch.setattr("monitorinbox2kuma.service.time.sleep", stop_sleep)
+    monkeypatch.setattr(service, "_wait_for_next_cycle", stop_wait)
 
     with pytest.raises(StopLoop):
         service.run()
@@ -127,3 +127,20 @@ def test_service_keeps_running_after_cycle_error_in_daemon_mode(tmp_path, monkey
     snapshot = service._runtime_status.snapshot()
     assert snapshot.phase == "error"
     assert snapshot.last_error == "graph exploded"
+
+
+def test_manual_poll_request_sets_pending_flag_and_wakes_next_cycle(tmp_path) -> None:
+    state_path = tmp_path / "state.json"
+    settings = make_settings(state_path)
+    settings = Settings(**{**settings.__dict__, "once": False, "poll_interval_seconds": 300})
+    service = BackupMonitorService(settings, graph_client=FakeGraphClient([]), kuma_client=FakeKumaClient())
+
+    assert service.request_manual_poll() is True
+    snapshot = service._runtime_status.snapshot()
+    assert snapshot.manual_poll_pending is True
+
+    should_continue = service._wait_for_next_cycle()
+
+    assert should_continue is True
+    snapshot = service._runtime_status.snapshot()
+    assert snapshot.activity == "Manuel polling er modtaget og starter nu."

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -35,7 +36,8 @@ class BackupMonitorService:
         self._graph = graph_client or GraphClient(settings)
         self._kuma = kuma_client or KumaClient(settings)
         self._runtime_status = RuntimeStatus()
-        self._monitor_server = MonitorServer(settings, self._runtime_status)
+        self._manual_poll_event = threading.Event()
+        self._monitor_server = MonitorServer(settings, self._runtime_status, self.request_manual_poll)
 
     def run(self) -> None:
         self._monitor_server.start()
@@ -60,12 +62,8 @@ class BackupMonitorService:
                 self._monitor_server.stop()
                 return
 
-            if self._runtime_status.snapshot().phase != "error":
-                self._runtime_status.mark_phase(
-                    "sleeping",
-                    f"Venter {self._settings.poll_interval_seconds} sekunder til næste polling.",
-                )
-            time.sleep(self._settings.poll_interval_seconds)
+            if self._wait_for_next_cycle():
+                continue
 
     def run_once(self) -> None:
         self._runtime_status.start_cycle()
@@ -174,3 +172,33 @@ class BackupMonitorService:
                 message.subject or message.message_id,
                 exc_info=True,
             )
+
+    def request_manual_poll(self) -> bool:
+        if self._settings.once:
+            return False
+
+        self._runtime_status.record_manual_poll_request()
+        self._manual_poll_event.set()
+        return True
+
+    def _wait_for_next_cycle(self) -> bool:
+        if self._manual_poll_event.is_set():
+            self._manual_poll_event.clear()
+            self._runtime_status.manual_poll_received()
+            return True
+
+        if self._runtime_status.snapshot().phase == "error":
+            activity = f"Seneste polling fejlede. Nyt forsøg om {self._settings.poll_interval_seconds} sekunder."
+        else:
+            activity = f"Venter {self._settings.poll_interval_seconds} sekunder til næste polling."
+
+        self._runtime_status.schedule_next_poll(
+            after_seconds=self._settings.poll_interval_seconds,
+            activity=activity,
+        )
+        manual_requested = self._manual_poll_event.wait(timeout=self._settings.poll_interval_seconds)
+        if manual_requested:
+            self._manual_poll_event.clear()
+            self._runtime_status.manual_poll_received()
+            return True
+        return False

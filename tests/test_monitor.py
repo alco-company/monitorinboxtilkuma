@@ -92,8 +92,9 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
         activity="Behandler en ny relevant e-mail.",
     )
     runtime.complete_cycle(processed_count=2, activity="Polling færdig. Behandlede 2 e-mails.")
+    runtime.schedule_next_poll(after_seconds=300, activity="Venter 300 sekunder til næste polling.")
 
-    server = MonitorServer(settings, runtime)
+    server = MonitorServer(settings, runtime, lambda: True)
     server.start()
 
     try:
@@ -106,6 +107,7 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
         assert payload["service_status"] == "up"
         assert payload["runtime"]["last_fetch_count"] == 4
         assert payload["runtime"]["last_processed_count"] == 2
+        assert payload["runtime"]["next_poll_due_at"] is not None
         assert payload["state"]["last_pushed_summary"] == "Backup OK"
 
         html_request = Request(f"http://127.0.0.1:{server.port}/")
@@ -115,5 +117,30 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
 
         assert "Backup Monitor" in page
         assert "Backup OK" in page
+        assert "Kør manuel poll nu" in page
+        assert "next-poll-countdown" in page
+    finally:
+        server.stop()
+
+
+def test_monitor_manual_poll_endpoint_triggers_callback(tmp_path) -> None:
+    settings = make_settings(tmp_path / "state.json")
+    runtime = RuntimeStatus()
+    calls = []
+
+    def trigger() -> bool:
+        calls.append("poll")
+        return True
+
+    server = MonitorServer(settings, runtime, trigger)
+    server.start()
+
+    try:
+        request = Request(f"http://127.0.0.1:{server.port}/api/poll", method="POST")
+        request.add_header("Authorization", auth_header("admin", "secret123"))
+        with urlopen(request) as response:
+            assert response.geturl().endswith("/")
+
+        assert calls == ["poll"]
     finally:
         server.stop()

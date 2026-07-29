@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 from .config import Settings
@@ -46,6 +46,7 @@ class RuntimeSnapshot:
     phase: str
     phase_label: str
     activity: str
+    next_poll_due_at: Optional[str]
     last_cycle_started_at: Optional[str]
     last_cycle_completed_at: Optional[str]
     last_cycle_duration_seconds: Optional[float]
@@ -54,6 +55,8 @@ class RuntimeSnapshot:
     last_processed_count: int
     last_message_subject: Optional[str]
     last_message_received_at: Optional[str]
+    manual_poll_pending: bool
+    last_manual_poll_requested_at: Optional[str]
     last_error: Optional[str]
     last_error_at: Optional[str]
 
@@ -64,6 +67,7 @@ class RuntimeStatus:
         self._started_at = _utcnow()
         self._phase = "starting"
         self._activity = "Service starter."
+        self._next_poll_due_at: Optional[datetime] = None
         self._last_cycle_started_at: Optional[datetime] = None
         self._last_cycle_completed_at: Optional[datetime] = None
         self._last_cycle_duration_seconds: Optional[float] = None
@@ -72,6 +76,8 @@ class RuntimeStatus:
         self._last_processed_count = 0
         self._last_message_subject: Optional[str] = None
         self._last_message_received_at: Optional[datetime] = None
+        self._manual_poll_pending = False
+        self._last_manual_poll_requested_at: Optional[datetime] = None
         self._last_error: Optional[str] = None
         self._last_error_at: Optional[datetime] = None
 
@@ -84,10 +90,12 @@ class RuntimeStatus:
         with self._lock:
             self._phase = "polling"
             self._activity = "Henter nye e-mails fra Microsoft 365."
+            self._next_poll_due_at = None
             self._last_cycle_started_at = _utcnow()
             self._last_fetch_count = 0
             self._last_relevant_count = 0
             self._last_processed_count = 0
+            self._manual_poll_pending = False
 
     def record_fetch(self, *, total_messages: int, relevant_messages: int) -> None:
         with self._lock:
@@ -121,6 +129,33 @@ class RuntimeStatus:
             self._last_error = str(exc)
             self._last_error_at = _utcnow()
 
+    def schedule_next_poll(self, *, after_seconds: int, activity: str) -> None:
+        with self._lock:
+            self._next_poll_due_at = _utcnow().replace(microsecond=0)
+            self._next_poll_due_at = self._next_poll_due_at.fromtimestamp(
+                self._next_poll_due_at.timestamp() + after_seconds,
+                tz=timezone.utc,
+            )
+            if self._phase != "error":
+                self._phase = "sleeping"
+            self._activity = activity
+
+    def clear_next_poll(self) -> None:
+        with self._lock:
+            self._next_poll_due_at = None
+
+    def record_manual_poll_request(self) -> None:
+        with self._lock:
+            self._manual_poll_pending = True
+            self._last_manual_poll_requested_at = _utcnow()
+
+    def manual_poll_received(self) -> None:
+        with self._lock:
+            self._next_poll_due_at = None
+            if self._phase != "error":
+                self._phase = "sleeping"
+            self._activity = "Manuel polling er modtaget og starter nu."
+
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
             return RuntimeSnapshot(
@@ -128,6 +163,7 @@ class RuntimeStatus:
                 phase=self._phase,
                 phase_label=_phase_label(self._phase),
                 activity=self._activity,
+                next_poll_due_at=_to_iso(self._next_poll_due_at),
                 last_cycle_started_at=_to_iso(self._last_cycle_started_at),
                 last_cycle_completed_at=_to_iso(self._last_cycle_completed_at),
                 last_cycle_duration_seconds=self._last_cycle_duration_seconds,
@@ -136,6 +172,8 @@ class RuntimeStatus:
                 last_processed_count=self._last_processed_count,
                 last_message_subject=self._last_message_subject,
                 last_message_received_at=_to_iso(self._last_message_received_at),
+                manual_poll_pending=self._manual_poll_pending,
+                last_manual_poll_requested_at=_to_iso(self._last_manual_poll_requested_at),
                 last_error=self._last_error,
                 last_error_at=_to_iso(self._last_error_at),
             )
@@ -166,6 +204,7 @@ def build_status_snapshot(settings: Settings, runtime_status: RuntimeStatus) -> 
             "phase": runtime.phase,
             "phase_label": runtime.phase_label,
             "activity": runtime.activity,
+            "next_poll_due_at": runtime.next_poll_due_at,
             "last_cycle_started_at": runtime.last_cycle_started_at,
             "last_cycle_completed_at": runtime.last_cycle_completed_at,
             "last_cycle_duration_seconds": runtime.last_cycle_duration_seconds,
@@ -174,6 +213,8 @@ def build_status_snapshot(settings: Settings, runtime_status: RuntimeStatus) -> 
             "last_processed_count": runtime.last_processed_count,
             "last_message_subject": runtime.last_message_subject,
             "last_message_received_at": runtime.last_message_received_at,
+            "manual_poll_pending": runtime.manual_poll_pending,
+            "last_manual_poll_requested_at": runtime.last_manual_poll_requested_at,
             "last_error": runtime.last_error,
             "last_error_at": runtime.last_error_at,
         },
@@ -184,6 +225,7 @@ def build_status_snapshot(settings: Settings, runtime_status: RuntimeStatus) -> 
             "last_pushed_at": _to_iso(state.last_pushed_at),
             "processed_message_count": len(state.processed_message_ids),
         },
+        "manual_poll_available": not settings.once,
         "state_error": state_error,
     }
 
@@ -192,6 +234,11 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
     state = snapshot["state"]
     status_class = html.escape(str(snapshot["service_status"]))
+    next_poll_due_at = runtime["next_poll_due_at"] or ""
+    countdown_initial = "Ikke planlagt" if not next_poll_due_at else ""
+    manual_button_state = "disabled" if not snapshot["manual_poll_available"] else ""
+    manual_button_text = "Manuel polling er ikke tilgængelig i --once mode" if not snapshot["manual_poll_available"] else "Kør manuel poll nu"
+    manual_poll_note = "Ja" if runtime["manual_poll_pending"] else "Nej"
 
     def line(label: str, value: Any) -> str:
         rendered = "Ikke endnu" if value in (None, "") else html.escape(str(value))
@@ -311,6 +358,32 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
       font-size: 1.1rem;
       line-height: 1.5;
     }}
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-top: 8px;
+    }}
+    .button {{
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: #1f2933;
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .button[disabled] {{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }}
+    .meta {{
+      color: var(--muted);
+      font-size: 0.95rem;
+    }}
     @media (max-width: 640px) {{
       .shell {{ width: min(100% - 20px, 1080px); margin: 20px auto; }}
       .hero, .grid > section {{ padding: 20px; border-radius: 20px; }}
@@ -327,6 +400,12 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
         <span>{html.escape(str(runtime["phase_label"]))} / {html.escape(str(snapshot["service_status"]))}</span>
       </div>
       <p class="summary">{html.escape(str(runtime["activity"]))}</p>
+      <div class="actions">
+        <form method="post" action="/api/poll">
+          <button class="button" type="submit" {manual_button_state}>{html.escape(manual_button_text)}</button>
+        </form>
+        <span class="meta">Næste automatiske poll: <strong id="next-poll-countdown">{countdown_initial}</strong></span>
+      </div>
       {f"<p class='summary'>State-fil kunne ikke læses: {html.escape(snapshot['state_error'])}</p>" if snapshot["state_error"] else ""}
     </section>
     <div class="grid">
@@ -335,6 +414,9 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
         <div class="stack">
           {line("Mailbox", snapshot["mailbox"])}
           {line("Poll interval", f"{snapshot['poll_interval_seconds']} sekunder")}
+          {line("Næste poll kl.", runtime["next_poll_due_at"])}
+          {line("Manuel poll afventer", manual_poll_note)}
+          {line("Sidste manuelle klik", runtime["last_manual_poll_requested_at"])}
           {line("Startet", runtime["started_at"])}
           {line("State-fil", snapshot["state_file"])}
         </div>
@@ -371,6 +453,39 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
       </section>
     </div>
   </main>
+  <script>
+    (function () {{
+      const target = document.getElementById("next-poll-countdown");
+      const dueAtRaw = {json.dumps(next_poll_due_at)};
+      if (!target || !dueAtRaw) {{
+        if (target && !target.textContent) {{
+          target.textContent = "Ikke planlagt";
+        }}
+        return;
+      }}
+
+      const dueAt = new Date(dueAtRaw);
+      const format = (seconds) => {{
+        if (seconds <= 0) {{
+          return "Starter nu";
+        }}
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins === 0) {{
+          return `${{secs}} sek`;
+        }}
+        return `${{mins}}m ${{secs.toString().padStart(2, "0")}}s`;
+      }};
+
+      const tick = () => {{
+        const diffSeconds = Math.max(0, Math.floor((dueAt.getTime() - Date.now()) / 1000));
+        target.textContent = format(diffSeconds);
+      }};
+
+      tick();
+      window.setInterval(tick, 1000);
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -379,10 +494,17 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
 class _MonitorHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address: tuple[str, int], settings: Settings, runtime_status: RuntimeStatus) -> None:
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        settings: Settings,
+        runtime_status: RuntimeStatus,
+        manual_poll_callback: Optional[Callable[[], bool]],
+    ) -> None:
         super().__init__(server_address, _MonitorRequestHandler)
         self.settings = settings
         self.runtime_status = runtime_status
+        self.manual_poll_callback = manual_poll_callback
 
 
 class _MonitorRequestHandler(BaseHTTPRequestHandler):
@@ -418,6 +540,34 @@ class _MonitorRequestHandler(BaseHTTPRequestHandler):
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
+    def do_POST(self) -> None:  # noqa: N802
+        if not self._is_authorized():
+            self._require_auth()
+            return
+
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/poll":
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+
+        if self.server.manual_poll_callback is None:
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "Manual poll not available")
+            return
+
+        triggered = self.server.manual_poll_callback()
+        if "application/json" in self.headers.get("Accept", ""):
+            payload = json.dumps({"ok": triggered}, indent=2).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", "/")
+        self.end_headers()
+
     def log_message(self, format: str, *args: Any) -> None:
         LOGGER.info("Monitor page: " + format, *args)
 
@@ -450,9 +600,15 @@ class _MonitorRequestHandler(BaseHTTPRequestHandler):
 
 
 class MonitorServer:
-    def __init__(self, settings: Settings, runtime_status: RuntimeStatus) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        runtime_status: RuntimeStatus,
+        manual_poll_callback: Optional[Callable[[], bool]] = None,
+    ) -> None:
         self._settings = settings
         self._runtime_status = runtime_status
+        self._manual_poll_callback = manual_poll_callback
         self._server: Optional[_MonitorHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -466,6 +622,7 @@ class MonitorServer:
             (self._settings.monitor_host, self._settings.monitor_port),
             self._settings,
             self._runtime_status,
+            self._manual_poll_callback,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, name="monitor-status-server", daemon=True)
         self._thread.start()
