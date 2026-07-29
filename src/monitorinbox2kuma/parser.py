@@ -6,13 +6,23 @@ from typing import Iterable, Optional
 from .models import MailMessage, ParsedBackupStatus
 
 ABB_SUBJECT_RE = re.compile(
-    r"^(?P<host>\S+)\s+Active Backup for Business - backupopgave\s+"
-    r"(?P<job>.+?)\s+på\s+(?P<store>.+?)\s+er\s+(?P<result>.+)$",
+    r"^(?:\[(?P<bracket_host>[^\]]+)\]|(?P<host>\S+))\s+Active Backup for Business - backupopgave\s+"
+    r"(?P<job>.+?)\s+på\s+(?P<store>.+?)\s+(?:er|blev)\s+(?P<result>.+)$",
+    flags=re.IGNORECASE,
+)
+ABB_MISSED_SUBJECT_RE = re.compile(
+    r"^(?:\[(?P<bracket_host>[^\]]+)\]|(?P<host>\S+))\s+Active Backup for Business - "
+    r"backupopgaverne\s+på\s+(?P<store>.+?)\s+(?P<result>.+)$",
     flags=re.IGNORECASE,
 )
 M365_SUBJECT_RE = re.compile(
     r"^(?:(?P<host>\S+)\s+)?Active Backup for Microsoft 365 - backupopgaven\s+\[(?P<job>.+?)\]\s+"
     r"på\s+\[(?P<store>.+?)\]\s+er\s+(?P<result>.+)$",
+    flags=re.IGNORECASE,
+)
+DATABASE_BACKUP_RE = re.compile(
+    r"^(?:\[(?P<bracket_host>[^\]]+)\]|(?P<host>\S+))\s+Databackupopgave\s+på\s+(?P<store>.+?)\s+"
+    r"(?P<result>.+)$",
     flags=re.IGNORECASE,
 )
 COMPLETED_BACKUP_RE = re.compile(
@@ -23,6 +33,10 @@ COMPLETED_BACKUP_RE = re.compile(
 
 def _normalize_text(parts: Iterable[str]) -> str:
     return "\n".join(part.strip() for part in parts if part).strip().lower()
+
+
+def _subject_host(match: re.Match[str]) -> str:
+    return (match.groupdict().get("bracket_host") or match.groupdict().get("host") or "").strip()
 
 
 def _shorten_m365_job_name(job: str) -> str:
@@ -36,13 +50,23 @@ def extract_backup_job_name(message: MailMessage) -> str:
     match = ABB_SUBJECT_RE.match(subject)
     if match:
         job = match.group("job").strip()
-        host = match.group("host").strip()
+        host = _subject_host(match)
         return f"ABB {job} @ {host}"
+
+    match = ABB_MISSED_SUBJECT_RE.match(subject)
+    if match:
+        host = _subject_host(match)
+        return f"ABB planlagte backupopgaver @ {host}"
 
     match = M365_SUBJECT_RE.match(subject)
     if match:
         job = _shorten_m365_job_name(match.group("job"))
         return f"Synology 365 backupopgaven {job}"
+
+    match = DATABASE_BACKUP_RE.match(subject)
+    if match:
+        host = _subject_host(match)
+        return f"Databackup @ {host}"
 
     match = COMPLETED_BACKUP_RE.match(subject)
     if match:

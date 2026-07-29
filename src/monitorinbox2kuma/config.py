@@ -21,6 +21,8 @@ DEFAULT_SUCCESS_PATTERNS = [
 DEFAULT_FAILURE_PATTERNS = [
     r"delvist gennemført",
     r"partially completed",
+    r"blev ignoreret",
+    r"missede deres planlagte backupopgaver",
     r"\bfailed\b",
     r"\berror\b",
     r"\bmislykkedes\b",

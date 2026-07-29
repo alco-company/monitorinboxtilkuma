@@ -125,3 +125,47 @@ def test_parser_treats_partially_completed_as_failure() -> None:
     assert parsed is not None
     assert parsed.job_name == "Synology 365 backupopgaven Danavinduer"
     assert parsed.status == "down"
+
+
+def test_parser_treats_ignored_abb_backup_as_failure() -> None:
+    parsed = parse_backup_status(
+        make_message(
+            "[Thisted-Backup] Active Backup for Business - backupopgave Fuglsang-Fil "
+            "på Thisted-Backup blev ignoreret"
+        ),
+        success_patterns=[r"completed successfully"],
+        failure_patterns=[r"blev ignoreret", r"\bmislykkedes\b"],
+    )
+
+    assert parsed is not None
+    assert parsed.job_name == "ABB Fuglsang-Fil @ Thisted-Backup"
+    assert parsed.status == "down"
+
+
+def test_parser_treats_missed_scheduled_abb_backups_as_failure() -> None:
+    parsed = parse_backup_status(
+        make_message(
+            "[Thisted-Backup] Active Backup for Business - backupopgaverne "
+            "på Thisted-Backup missede deres planlagte backupopgaver"
+        ),
+        success_patterns=[r"completed successfully"],
+        failure_patterns=[r"missede deres planlagte backupopgaver", r"\bmislykkedes\b"],
+    )
+
+    assert parsed is not None
+    assert parsed.job_name == "ABB planlagte backupopgaver @ Thisted-Backup"
+    assert parsed.status == "down"
+
+
+def test_parser_treats_database_backup_failure_as_down() -> None:
+    parsed = parse_backup_status(
+        make_message(
+            "[Thisted-Backup] Databackupopgave på Thisted-Backup mislykkedes"
+        ),
+        success_patterns=[r"completed successfully"],
+        failure_patterns=[r"blev ignoreret", r"\bmislykkedes\b"],
+    )
+
+    assert parsed is not None
+    assert parsed.job_name == "Databackup @ Thisted-Backup"
+    assert parsed.status == "down"
