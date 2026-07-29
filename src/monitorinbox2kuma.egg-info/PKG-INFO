@@ -1,0 +1,108 @@
+Metadata-Version: 2.1
+Name: monitorinbox2kuma
+Version: 0.1.0
+Summary: Poll a Microsoft 365 mailbox for Synology backup emails and push the result to Uptime Kuma.
+Home-page: UNKNOWN
+License: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+
+# monitorinbox2kuma
+
+Small service that watches a Microsoft 365 mailbox for Synology backup emails and forwards the result to an Uptime Kuma Push Monitor.
+
+## What it does
+
+1. Signs in to Microsoft Graph with app-only credentials.
+2. Reads new emails from the selected mailbox and folder.
+3. Matches the email subject and body against success and failure patterns.
+4. Pushes `up` or `down` to Uptime Kuma.
+5. Stores local state so the same message is never processed twice.
+
+## Architecture
+
+The current implementation uses polling because it is simple to operate and works well for a dedicated monitor mailbox. If Synology sends one success email per backup run, Uptime Kuma can also detect missing emails through the Push Monitor heartbeat window.
+
+## Requirements
+
+- Microsoft 365 / Exchange Online mailbox, for example `monitor@al.dk`
+- Entra ID app registration with Graph access
+- Uptime Kuma Push Monitor URL
+- Python 3.9+ or Docker
+
+## Microsoft 365 setup
+
+1. Create an app registration in Microsoft Entra ID.
+2. Add the Microsoft Graph application permission `Mail.Read`.
+3. Grant admin consent to the app.
+4. For security, scope the app to only the monitor mailbox by using Exchange Online RBAC for Applications or a legacy Application Access Policy.
+5. Create a client secret and store the `tenant id`, `client id`, and `client secret`.
+
+## Uptime Kuma setup
+
+1. Create a new monitor of type `Push`.
+2. Copy the monitor's Push URL.
+3. Set the heartbeat interval so it matches how often the backup is expected to report in.
+
+Examples:
+
+- Daily backup: heartbeat around `26h`
+- Hourly backup: heartbeat around `70m`
+
+## Configuration
+
+Copy `.env.example` to `.env` and fill in the values.
+
+Important variables:
+
+- `M365_MAILBOX`: mailbox to monitor
+- `M365_ALLOWED_SENDERS`: comma-separated list of senders that are allowed
+- `KUMA_PUSH_URL`: Push URL from Uptime Kuma
+- `SUCCESS_PATTERNS`: optional JSON array of regex patterns for success
+- `FAILURE_PATTERNS`: optional JSON array of regex patterns for failure
+
+Example with more realistic Synology patterns:
+
+```env
+M365_ALLOWED_SENDERS=backup@firma.dk,alerts@synology.local
+SUCCESS_PATTERNS=["completed successfully","Hyper Backup.*success","Backup task.*successful"]
+FAILURE_PATTERNS=["\\bfailed\\b","\\berror\\b","destination disk is full","backup task.*aborted"]
+```
+
+## Run locally
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .[dev]
+cp .env.example .env
+monitorinbox2kuma --once
+monitorinbox2kuma
+```
+
+## Docker
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+The state file is written to `./data/state.json` by default.
+
+## Runtime behavior
+
+- First run: the service takes the newest relevant email and pushes its status as the initial state.
+- Later runs: only new emails are processed.
+- If an email does not match your patterns, it is ignored.
+
+## Production tips
+
+- Use a dedicated mailbox with low traffic.
+- Filter on sender so unrelated emails never reach the parser.
+- Tune the regex patterns from real Synology emails.
+- Run it in Docker on an integration host, or from cron with `--once`.
+
+

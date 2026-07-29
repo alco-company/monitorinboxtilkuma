@@ -1,0 +1,3 @@
+[console_scripts]
+monitorinbox2kuma = monitorinbox2kuma.main:main
+

@@ -1,0 +1,1 @@
+"""monitorinbox2kuma package."""
