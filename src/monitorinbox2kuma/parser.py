@@ -11,7 +11,7 @@ ABB_SUBJECT_RE = re.compile(
     flags=re.IGNORECASE,
 )
 M365_SUBJECT_RE = re.compile(
-    r"^Active Backup for Microsoft 365 - backupopgaven\s+\[(?P<job>.+?)\]\s+"
+    r"^(?:(?P<host>\S+)\s+)?Active Backup for Microsoft 365 - backupopgaven\s+\[(?P<job>.+?)\]\s+"
     r"på\s+\[(?P<store>.+?)\]\s+er\s+(?P<result>.+)$",
     flags=re.IGNORECASE,
 )
@@ -25,6 +25,11 @@ def _normalize_text(parts: Iterable[str]) -> str:
     return "\n".join(part.strip() for part in parts if part).strip().lower()
 
 
+def _shorten_m365_job_name(job: str) -> str:
+    shortened = re.sub(r"\s+backup\s*$", "", job.strip(), flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", shortened).strip()
+
+
 def extract_backup_job_name(message: MailMessage) -> str:
     subject = message.subject.strip()
 
@@ -36,8 +41,8 @@ def extract_backup_job_name(message: MailMessage) -> str:
 
     match = M365_SUBJECT_RE.match(subject)
     if match:
-        job = match.group("job").strip()
-        return f"M365 {job}"
+        job = _shorten_m365_job_name(match.group("job"))
+        return f"Synology 365 backupopgaven {job}"
 
     match = COMPLETED_BACKUP_RE.match(subject)
     if match:

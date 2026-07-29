@@ -86,6 +86,12 @@ def test_render_monitor_name_uses_job_name_template() -> None:
     assert monitor_name == "Synology Backup - M365 NordTHY A/S"
 
 
+def test_render_monitor_name_keeps_short_synology_365_name() -> None:
+    monitor_name = render_monitor_name(make_settings(), "Synology 365 backupopgaven ALCO 365")
+
+    assert monitor_name == "Synology 365 backupopgaven ALCO 365"
+
+
 class TimeoutSocket:
     def call(self, event, payload, timeout):
         raise socketio.exceptions.TimeoutError()

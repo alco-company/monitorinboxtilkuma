@@ -98,7 +98,18 @@ def test_extracts_job_name_for_active_backup_m365_subject() -> None:
         )
     )
 
-    assert job_name == "M365 NordTHY A/S"
+    assert job_name == "Synology 365 backupopgaven NordTHY A/S"
+
+
+def test_extracts_short_job_name_for_host_prefixed_m365_subject() -> None:
+    job_name = extract_backup_job_name(
+        make_message(
+            "adslthi.alco.dk Active Backup for Microsoft 365 - backupopgaven [ALCO 365 Backup] "
+            "på [ALCOStore] er fuldført"
+        )
+    )
+
+    assert job_name == "Synology 365 backupopgaven ALCO 365"
 
 
 def test_parser_treats_partially_completed_as_failure() -> None:
@@ -112,5 +123,5 @@ def test_parser_treats_partially_completed_as_failure() -> None:
     )
 
     assert parsed is not None
-    assert parsed.job_name == "M365 Danavinduer"
+    assert parsed.job_name == "Synology 365 backupopgaven Danavinduer"
     assert parsed.status == "down"

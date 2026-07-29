@@ -31,6 +31,11 @@ def build_kuma_push_url(base_url: str, push_token: str) -> str:
 
 
 def render_monitor_name(settings: Settings, job_name: str) -> str:
+    if (
+        settings.kuma_monitor_name_template == "Synology Backup - {job_name}"
+        and job_name.startswith("Synology 365 ")
+    ):
+        return job_name
     return settings.kuma_monitor_name_template.format(job_name=job_name, mailbox=settings.mailbox)
 
 
