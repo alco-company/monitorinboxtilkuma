@@ -6,6 +6,7 @@ import pytest
 from monitorinbox2kuma.config import Settings
 from monitorinbox2kuma.models import MailMessage
 from monitorinbox2kuma.service import BackupMonitorService
+from monitorinbox2kuma.state import State
 
 
 class FakeGraphClient:
@@ -105,6 +106,10 @@ def test_service_deletes_processed_relevant_messages(tmp_path) -> None:
     assert graph.deleted_message_ids == ["message-1"]
     assert kuma.pushes[0][0] == "up"
     assert kuma.pushes[0][2] == "Hyper Backup task completed successfully"
+    snapshot = service._runtime_status.snapshot()
+    assert snapshot.inbox_messages == []
+    loaded = State.load(service._settings.state_file)
+    assert loaded.recent_processed_messages[0].sender == "alerts@synology.local"
 
 
 def test_service_keeps_running_after_cycle_error_in_daemon_mode(tmp_path, monkeypatch) -> None:
@@ -144,3 +149,11 @@ def test_manual_poll_request_sets_pending_flag_and_wakes_next_cycle(tmp_path) ->
     assert should_continue is True
     snapshot = service._runtime_status.snapshot()
     assert snapshot.activity == "Manuel polling er modtaget og starter nu."
+
+    service._runtime_status.schedule_next_poll(
+        after_seconds=settings.poll_interval_seconds,
+        activity=f"Venter {settings.poll_interval_seconds} sekunder til næste polling.",
+    )
+    snapshot = service._runtime_status.snapshot()
+    assert snapshot.manual_poll_pending is False
+    assert snapshot.phase == "sleeping"

@@ -12,11 +12,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .state import State
 
 LOGGER = logging.getLogger(__name__)
+DISPLAY_TZ = ZoneInfo("Europe/Copenhagen")
 
 
 def _utcnow() -> datetime:
@@ -27,6 +29,19 @@ def _to_iso(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _to_local_display(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    local_value = value.astimezone(DISPLAY_TZ)
+    return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _format_iso_for_display(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return _to_local_display(datetime.fromisoformat(value))
 
 
 def _phase_label(phase: str) -> str:
@@ -55,6 +70,7 @@ class RuntimeSnapshot:
     last_processed_count: int
     last_message_subject: Optional[str]
     last_message_received_at: Optional[str]
+    inbox_messages: list[dict[str, Any]]
     manual_poll_pending: bool
     last_manual_poll_requested_at: Optional[str]
     last_error: Optional[str]
@@ -76,6 +92,7 @@ class RuntimeStatus:
         self._last_processed_count = 0
         self._last_message_subject: Optional[str] = None
         self._last_message_received_at: Optional[datetime] = None
+        self._inbox_messages: list[dict[str, Any]] = []
         self._manual_poll_pending = False
         self._last_manual_poll_requested_at: Optional[datetime] = None
         self._last_error: Optional[str] = None
@@ -111,6 +128,10 @@ class RuntimeStatus:
             self._last_message_subject = subject
             self._last_message_received_at = received_at
 
+    def update_inbox_messages(self, messages: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._inbox_messages = list(messages)
+
     def complete_cycle(self, *, processed_count: int, activity: str) -> None:
         finished_at = _utcnow()
         with self._lock:
@@ -136,6 +157,7 @@ class RuntimeStatus:
                 self._next_poll_due_at.timestamp() + after_seconds,
                 tz=timezone.utc,
             )
+            self._manual_poll_pending = False
             if self._phase != "error":
                 self._phase = "sleeping"
             self._activity = activity
@@ -172,6 +194,7 @@ class RuntimeStatus:
                 last_processed_count=self._last_processed_count,
                 last_message_subject=self._last_message_subject,
                 last_message_received_at=_to_iso(self._last_message_received_at),
+                inbox_messages=list(self._inbox_messages),
                 manual_poll_pending=self._manual_poll_pending,
                 last_manual_poll_requested_at=_to_iso(self._last_manual_poll_requested_at),
                 last_error=self._last_error,
@@ -197,33 +220,60 @@ def build_status_snapshot(settings: Settings, runtime_status: RuntimeStatus) -> 
         "title": settings.monitor_title,
         "mailbox": settings.mailbox,
         "poll_interval_seconds": settings.poll_interval_seconds,
+        "display_timezone": "Europe/Copenhagen",
         "state_file": str(settings.state_file),
         "service_status": service_status,
         "runtime": {
             "started_at": runtime.started_at,
+            "started_at_display": _format_iso_for_display(runtime.started_at),
             "phase": runtime.phase,
             "phase_label": runtime.phase_label,
             "activity": runtime.activity,
             "next_poll_due_at": runtime.next_poll_due_at,
+            "next_poll_due_at_display": _format_iso_for_display(runtime.next_poll_due_at),
             "last_cycle_started_at": runtime.last_cycle_started_at,
+            "last_cycle_started_at_display": _format_iso_for_display(runtime.last_cycle_started_at),
             "last_cycle_completed_at": runtime.last_cycle_completed_at,
+            "last_cycle_completed_at_display": _format_iso_for_display(runtime.last_cycle_completed_at),
             "last_cycle_duration_seconds": runtime.last_cycle_duration_seconds,
             "last_fetch_count": runtime.last_fetch_count,
             "last_relevant_count": runtime.last_relevant_count,
             "last_processed_count": runtime.last_processed_count,
             "last_message_subject": runtime.last_message_subject,
             "last_message_received_at": runtime.last_message_received_at,
+            "last_message_received_at_display": _format_iso_for_display(runtime.last_message_received_at),
+            "inbox_messages": [
+                {
+                    **item,
+                    "received_at_display": _format_iso_for_display(item.get("received_at")),
+                }
+                for item in runtime.inbox_messages
+            ],
             "manual_poll_pending": runtime.manual_poll_pending,
             "last_manual_poll_requested_at": runtime.last_manual_poll_requested_at,
+            "last_manual_poll_requested_at_display": _format_iso_for_display(runtime.last_manual_poll_requested_at),
             "last_error": runtime.last_error,
             "last_error_at": runtime.last_error_at,
+            "last_error_at_display": _format_iso_for_display(runtime.last_error_at),
         },
         "state": {
             "last_seen_received_at": _to_iso(state.last_seen_received_at),
+            "last_seen_received_at_display": _to_local_display(state.last_seen_received_at),
             "last_pushed_status": state.last_pushed_status,
             "last_pushed_summary": state.last_pushed_summary,
             "last_pushed_at": _to_iso(state.last_pushed_at),
+            "last_pushed_at_display": _to_local_display(state.last_pushed_at),
             "processed_message_count": len(state.processed_message_ids),
+            "recent_processed_messages": [
+                {
+                    "sender": item.sender,
+                    "subject": item.subject,
+                    "subject_preview": item.subject[:72] + ("..." if len(item.subject) > 72 else ""),
+                    "received_at_display": _to_local_display(item.received_at),
+                    "processed_at_display": _to_local_display(item.processed_at),
+                }
+                for item in reversed(state.recent_processed_messages[-10:])
+            ],
         },
         "manual_poll_available": not settings.once,
         "state_error": state_error,
@@ -248,6 +298,24 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
             f"<span class='value'>{rendered}</span>"
             "</div>"
         )
+
+    def render_mail_cards(items: list[dict[str, Any]], *, empty_text: str, time_key: str) -> str:
+        if not items:
+            return f"<p class='summary'>{html.escape(empty_text)}</p>"
+
+        parts = []
+        for item in items:
+            sender = html.escape(str(item.get("sender") or "ukendt"))
+            subject = html.escape(str(item.get("subject_preview") or item.get("subject") or "(intet emne)"))
+            time_text = html.escape(str(item.get(time_key) or "Ukendt tidspunkt"))
+            parts.append(
+                "<div class='item'>"
+                f"<span class='label'>{sender}</span>"
+                f"<span class='value'>{subject}</span>"
+                f"<span class='meta'>{time_text}</span>"
+                "</div>"
+            )
+        return "".join(parts)
 
     return f"""<!doctype html>
 <html lang="da">
@@ -414,18 +482,19 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
         <div class="stack">
           {line("Mailbox", snapshot["mailbox"])}
           {line("Poll interval", f"{snapshot['poll_interval_seconds']} sekunder")}
-          {line("Næste poll kl.", runtime["next_poll_due_at"])}
+          {line("Tidszone", snapshot["display_timezone"])}
+          {line("Næste poll kl.", runtime["next_poll_due_at_display"])}
           {line("Manuel poll afventer", manual_poll_note)}
-          {line("Sidste manuelle klik", runtime["last_manual_poll_requested_at"])}
-          {line("Startet", runtime["started_at"])}
+          {line("Sidste manuelle klik", runtime["last_manual_poll_requested_at_display"])}
+          {line("Startet", runtime["started_at_display"])}
           {line("State-fil", snapshot["state_file"])}
         </div>
       </section>
       <section>
         <h2>Seneste polling</h2>
         <div class="stack">
-          {line("Polling startet", runtime["last_cycle_started_at"])}
-          {line("Polling afsluttet", runtime["last_cycle_completed_at"])}
+          {line("Polling startet", runtime["last_cycle_started_at_display"])}
+          {line("Polling afsluttet", runtime["last_cycle_completed_at_display"])}
           {line("Varighed", f"{runtime['last_cycle_duration_seconds']} sekunder" if runtime["last_cycle_duration_seconds"] is not None else None)}
           {line("Hentede e-mails", runtime["last_fetch_count"])}
           {line("Relevante e-mails", runtime["last_relevant_count"])}
@@ -437,18 +506,30 @@ def render_monitor_html(snapshot: Dict[str, Any]) -> str:
         <div class="stack">
           {line("Kuma-status", state["last_pushed_status"])}
           {line("Opsummering", state["last_pushed_summary"])}
-          {line("Sendt til Kuma", state["last_pushed_at"])}
+          {line("Sendt til Kuma", state["last_pushed_at_display"])}
           {line("Sidst sete e-mail", runtime["last_message_subject"])}
-          {line("E-mail modtaget", runtime["last_message_received_at"])}
+          {line("E-mail modtaget", runtime["last_message_received_at_display"])}
         </div>
       </section>
       <section>
         <h2>Fejl og cache</h2>
         <div class="stack">
           {line("Seneste fejl", runtime["last_error"])}
-          {line("Fejl tidspunkt", runtime["last_error_at"])}
+          {line("Fejl tidspunkt", runtime["last_error_at_display"])}
           {line("Cachede message ids", state["processed_message_count"])}
-          {line("Sidst sete received_at", state["last_seen_received_at"])}
+          {line("Sidst sete received_at", state["last_seen_received_at_display"])}
+        </div>
+      </section>
+      <section>
+        <h2>Inbox nu</h2>
+        <div class="stack">
+          {render_mail_cards(runtime["inbox_messages"], empty_text="Ingen mails i seneste inbox-snapshot.", time_key="received_at_display")}
+        </div>
+      </section>
+      <section>
+        <h2>Behandlede mails</h2>
+        <div class="stack">
+          {render_mail_cards(state["recent_processed_messages"], empty_text="Ingen behandlede mails endnu.", time_key="processed_at_display")}
         </div>
       </section>
     </div>

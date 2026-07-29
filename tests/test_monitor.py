@@ -91,6 +91,16 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
         received_at=datetime(2026, 7, 29, 10, 14, tzinfo=timezone.utc),
         activity="Behandler en ny relevant e-mail.",
     )
+    runtime.update_inbox_messages(
+        [
+            {
+                "sender": "someone@example.com",
+                "subject": "Weekly report",
+                "subject_preview": "Weekly report",
+                "received_at": "2026-07-29T10:13:00+00:00",
+            }
+        ]
+    )
     runtime.complete_cycle(processed_count=2, activity="Polling færdig. Behandlede 2 e-mails.")
     runtime.schedule_next_poll(after_seconds=300, activity="Venter 300 sekunder til næste polling.")
 
@@ -105,9 +115,12 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
 
         assert payload["title"] == "Backup Monitor"
         assert payload["service_status"] == "up"
+        assert payload["display_timezone"] == "Europe/Copenhagen"
         assert payload["runtime"]["last_fetch_count"] == 4
         assert payload["runtime"]["last_processed_count"] == 2
         assert payload["runtime"]["next_poll_due_at"] is not None
+        assert payload["runtime"]["next_poll_due_at_display"] is not None
+        assert payload["runtime"]["inbox_messages"][0]["sender"] == "someone@example.com"
         assert payload["state"]["last_pushed_summary"] == "Backup OK"
 
         html_request = Request(f"http://127.0.0.1:{server.port}/")
@@ -117,8 +130,12 @@ def test_monitor_returns_status_snapshot_and_html(tmp_path) -> None:
 
         assert "Backup Monitor" in page
         assert "Backup OK" in page
+        assert "Europe/Copenhagen" in page
         assert "Kør manuel poll nu" in page
         assert "next-poll-countdown" in page
+        assert "Inbox nu" in page
+        assert "Behandlede mails" in page
+        assert "someone@example.com" in page
     finally:
         server.stop()
 

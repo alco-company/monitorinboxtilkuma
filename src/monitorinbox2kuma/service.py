@@ -24,6 +24,17 @@ def _matches_sender(message: MailMessage, allowed_senders: Iterable[str]) -> boo
     return message.sender.lower() in allowed
 
 
+def _mail_preview(message: MailMessage) -> dict[str, str]:
+    subject = message.subject.strip() or "(intet emne)"
+    return {
+        "sender": message.sender,
+        "subject": subject,
+        "subject_preview": subject[:72] + ("..." if len(subject) > 72 else ""),
+        "received_at": message.received_at.isoformat(),
+        "received_at_display": "",
+    }
+
+
 class BackupMonitorService:
     def __init__(
         self,
@@ -81,6 +92,7 @@ class BackupMonitorService:
         relevant.sort(key=lambda item: item.received_at)
         self._runtime_status.record_fetch(total_messages=len(messages), relevant_messages=len(relevant))
         processed_count = 0
+        deleted_message_ids: set[str] = set()
 
         if not state.processed_message_ids and relevant:
             latest = relevant[-1]
@@ -102,9 +114,13 @@ class BackupMonitorService:
 
             for message in relevant:
                 state.remember_message(message.message_id)
+                state.record_processed_message(message, processed_at=datetime.now(timezone.utc))
                 processed_count += 1
+                deleted_message_ids.add(message.message_id)
                 self._delete_processed_message(message)
 
+            remaining_messages = [message for message in messages if message.message_id not in deleted_message_ids]
+            self._runtime_status.update_inbox_messages([_mail_preview(message) for message in remaining_messages[:10]])
             state.save(self._settings.state_file)
             self._runtime_status.complete_cycle(
                 processed_count=processed_count,
@@ -127,7 +143,9 @@ class BackupMonitorService:
                 failure_patterns=self._settings.failure_patterns,
             )
             state.remember_message(message.message_id)
+            state.record_processed_message(message, processed_at=datetime.now(timezone.utc))
             processed_count += 1
+            deleted_message_ids.add(message.message_id)
 
             if parsed is None:
                 LOGGER.info("Skipped message '%s' because no status pattern matched.", message.subject)
@@ -142,6 +160,8 @@ class BackupMonitorService:
         elif processed_count == 0:
             LOGGER.info("No unprocessed relevant messages found.")
 
+        remaining_messages = [message for message in messages if message.message_id not in deleted_message_ids]
+        self._runtime_status.update_inbox_messages([_mail_preview(message) for message in remaining_messages[:10]])
         state.save(self._settings.state_file)
         if not messages:
             activity = "Ingen nye e-mails fundet."
