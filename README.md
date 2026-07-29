@@ -60,6 +60,11 @@ Important variables:
 - `KUMA_BASE_URL`: Kuma URL. `https://kuma.example.com/dashboard` is accepted and normalized automatically
 - `KUMA_JWT_TOKEN`: JWT from a previous Kuma login with `Remember Me`
 - `KUMA_MONITOR_NAME_TEMPLATE`: monitor name template, for example `Synology Backup - {job_name}`
+- `MONITOR_ENABLED`: set to `true` to expose a protected status page
+- `MONITOR_USERNAME`: username for the status page
+- `MONITOR_PASSWORD`: password for the status page
+- `MONITOR_PORT`: web port for the status page, default `8080`
+- `MONITOR_TITLE`: optional browser title for the status page
 - `SUCCESS_PATTERNS`: optional JSON array of regex patterns for success
 - `FAILURE_PATTERNS`: optional JSON array of regex patterns for failure
 
@@ -72,6 +77,16 @@ KUMA_JWT_TOKEN=eyJ...
 KUMA_MONITOR_NAME_TEMPLATE=Synology Backup - {job_name}
 KUMA_MONITOR_INTERVAL_SECONDS=93600
 KUMA_MONITOR_RETRY_INTERVAL_SECONDS=600
+```
+
+Example for the built-in monitor page:
+
+```env
+MONITOR_ENABLED=true
+MONITOR_USERNAME=monitor
+MONITOR_PASSWORD=change-me-now
+MONITOR_PORT=8080
+MONITOR_TITLE=Backup Mail Monitor
 ```
 
 If you prefer, you can still use `KUMA_USERNAME` and `KUMA_PASSWORD` instead of `KUMA_JWT_TOKEN`.
@@ -113,6 +128,8 @@ docker compose up -d --build
 
 The state file is written to `./data/state.json` by default.
 
+If the built-in monitor page is enabled, Docker exposes it on `http://localhost:8080/`. The JSON status payload is available on `http://localhost:8080/api/status`. Both endpoints require the configured username and password.
+
 ## Runtime behavior
 
 - First run: the service takes the newest relevant email and pushes its status as the initial state.
@@ -128,3 +145,4 @@ The state file is written to `./data/state.json` by default.
 - Tune the regex patterns from real Synology emails.
 - Run it in Docker on an integration host, or from cron with `--once`.
 - Because monitor creation uses Kuma's internal Socket.IO API, keep an eye on Kuma upgrades.
+- If you enable the built-in monitor page, choose a strong password and place it behind your usual firewall or reverse proxy controls.

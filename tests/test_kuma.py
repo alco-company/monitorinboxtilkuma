@@ -39,6 +39,12 @@ def make_settings() -> Settings:
         kuma_timeout_seconds=15,
         max_messages=50,
         log_level="INFO",
+        monitor_enabled=False,
+        monitor_host="127.0.0.1",
+        monitor_port=8080,
+        monitor_username=None,
+        monitor_password=None,
+        monitor_title="Monitor Inbox 2 Kuma",
         once=False,
         push_pending_on_start=False,
     )

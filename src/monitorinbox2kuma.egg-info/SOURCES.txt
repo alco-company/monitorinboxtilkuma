@@ -8,6 +8,7 @@ src/monitorinbox2kuma/graph_client.py
 src/monitorinbox2kuma/kuma.py
 src/monitorinbox2kuma/main.py
 src/monitorinbox2kuma/models.py
+src/monitorinbox2kuma/monitor.py
 src/monitorinbox2kuma/parser.py
 src/monitorinbox2kuma/service.py
 src/monitorinbox2kuma/state.py

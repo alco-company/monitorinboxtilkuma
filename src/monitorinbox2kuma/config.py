@@ -102,6 +102,12 @@ class Settings:
     kuma_timeout_seconds: int
     max_messages: int
     log_level: str
+    monitor_enabled: bool
+    monitor_host: str
+    monitor_port: int
+    monitor_username: Optional[str]
+    monitor_password: Optional[str]
+    monitor_title: str
     once: bool
     push_pending_on_start: bool
 
@@ -116,6 +122,12 @@ def load_settings(*, once: bool = False) -> Settings:
     kuma_timeout_seconds = int(os.getenv("KUMA_TIMEOUT_SECONDS", "15"))
     max_messages = int(os.getenv("MAX_MESSAGES", "50"))
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    monitor_enabled = _parse_bool("MONITOR_ENABLED", False)
+    monitor_host = os.getenv("MONITOR_HOST", "0.0.0.0").strip() or "0.0.0.0"
+    monitor_port = int(os.getenv("MONITOR_PORT", "8080"))
+    monitor_username = _optional_env("MONITOR_USERNAME")
+    monitor_password = _optional_env("MONITOR_PASSWORD")
+    monitor_title = os.getenv("MONITOR_TITLE", "Monitor Inbox 2 Kuma").strip() or "Monitor Inbox 2 Kuma"
     push_pending_on_start = _parse_bool("PUSH_PENDING_ON_START", False)
     kuma_auto_create_monitor = _parse_bool("KUMA_AUTO_CREATE_MONITOR", False)
     mailbox = _require_env("M365_MAILBOX").lower()
@@ -134,6 +146,8 @@ def load_settings(*, once: bool = False) -> Settings:
         raise ValueError("BOOTSTRAP_LOOKBACK_HOURS must be at least 1.")
     if max_messages < 1:
         raise ValueError("MAX_MESSAGES must be at least 1.")
+    if monitor_port < 1 or monitor_port > 65535:
+        raise ValueError("MONITOR_PORT must be between 1 and 65535.")
     if kuma_monitor_interval_seconds < 30:
         raise ValueError("KUMA_MONITOR_INTERVAL_SECONDS must be at least 30 seconds.")
     if kuma_monitor_retry_interval_seconds < 30:
@@ -159,6 +173,8 @@ def load_settings(*, once: bool = False) -> Settings:
         )
     if not kuma_push_url and not kuma_auto_create_monitor:
         raise ValueError("Set KUMA_PUSH_URL or enable KUMA_AUTO_CREATE_MONITOR.")
+    if monitor_enabled and not (monitor_username and monitor_password):
+        raise ValueError("MONITOR_ENABLED requires MONITOR_USERNAME and MONITOR_PASSWORD.")
 
     return Settings(
         tenant_id=_require_env("M365_TENANT_ID"),
@@ -190,6 +206,12 @@ def load_settings(*, once: bool = False) -> Settings:
         kuma_timeout_seconds=kuma_timeout_seconds,
         max_messages=max_messages,
         log_level=log_level,
+        monitor_enabled=monitor_enabled,
+        monitor_host=monitor_host,
+        monitor_port=monitor_port,
+        monitor_username=monitor_username,
+        monitor_password=monitor_password,
+        monitor_title=monitor_title,
         once=once,
         push_pending_on_start=push_pending_on_start,
     )

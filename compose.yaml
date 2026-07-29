@@ -2,9 +2,17 @@ services:
   monitorinbox2kuma:
     build: .
     restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - proxy
     env_file:
       - .env
     environment:
       STATE_FILE: /data/state.json
     volumes:
       - ./data:/data
+
+networks:
+  proxy:
+    external: true
