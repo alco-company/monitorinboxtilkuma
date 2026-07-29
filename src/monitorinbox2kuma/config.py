@@ -31,11 +31,25 @@ DEFAULT_FAILURE_PATTERNS = [
 ]
 
 
-def _require_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
+def _require_env_values(*names: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    missing: list[str] = []
+
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if not value:
+            missing.append(name)
+            continue
+        values[name] = value
+
+    if missing:
+        missing_list = ", ".join(missing)
+        raise ValueError(
+            "Missing required environment variables: "
+            f"{missing_list}. Copy .env.example to .env and fill in the values."
+        )
+
+    return values
 
 
 def _optional_env(name: str) -> Optional[str]:
@@ -115,6 +129,13 @@ class Settings:
 def load_settings(*, once: bool = False) -> Settings:
     load_dotenv()
 
+    required = _require_env_values(
+        "M365_TENANT_ID",
+        "M365_CLIENT_ID",
+        "M365_CLIENT_SECRET",
+        "M365_MAILBOX",
+    )
+
     state_file = Path(os.getenv("STATE_FILE", "./data/state.json")).expanduser()
     poll_interval_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
     bootstrap_lookback_hours = int(os.getenv("BOOTSTRAP_LOOKBACK_HOURS", "72"))
@@ -130,7 +151,7 @@ def load_settings(*, once: bool = False) -> Settings:
     monitor_title = os.getenv("MONITOR_TITLE", "Monitor Inbox 2 Kuma").strip() or "Monitor Inbox 2 Kuma"
     push_pending_on_start = _parse_bool("PUSH_PENDING_ON_START", False)
     kuma_auto_create_monitor = _parse_bool("KUMA_AUTO_CREATE_MONITOR", False)
-    mailbox = _require_env("M365_MAILBOX").lower()
+    mailbox = required["M365_MAILBOX"].lower()
     kuma_monitor_name_template = os.getenv(
         "KUMA_MONITOR_NAME_TEMPLATE",
         os.getenv("KUMA_MONITOR_NAME", "Synology Backup - {job_name}"),
@@ -177,9 +198,9 @@ def load_settings(*, once: bool = False) -> Settings:
         raise ValueError("MONITOR_ENABLED requires MONITOR_USERNAME and MONITOR_PASSWORD.")
 
     return Settings(
-        tenant_id=_require_env("M365_TENANT_ID"),
-        client_id=_require_env("M365_CLIENT_ID"),
-        client_secret=_require_env("M365_CLIENT_SECRET"),
+        tenant_id=required["M365_TENANT_ID"],
+        client_id=required["M365_CLIENT_ID"],
+        client_secret=required["M365_CLIENT_SECRET"],
         mailbox=mailbox,
         mail_folder=os.getenv("M365_MAIL_FOLDER", "inbox").strip() or "inbox",
         allowed_senders=_parse_csv_env("M365_ALLOWED_SENDERS"),
