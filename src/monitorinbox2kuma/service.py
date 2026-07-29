@@ -50,18 +50,21 @@ class BackupMonitorService:
                 self.run_once()
             except Exception as exc:
                 self._runtime_status.record_error(exc)
-                self._monitor_server.stop()
-                raise
+                LOGGER.exception("Polling cycle failed.")
+                if self._settings.once:
+                    self._monitor_server.stop()
+                    raise
 
             if self._settings.once:
                 self._runtime_status.mark_phase("idle", "Servicen har kørt én polling og er afsluttet.")
                 self._monitor_server.stop()
                 return
 
-            self._runtime_status.mark_phase(
-                "sleeping",
-                f"Venter {self._settings.poll_interval_seconds} sekunder til næste polling.",
-            )
+            if self._runtime_status.snapshot().phase != "error":
+                self._runtime_status.mark_phase(
+                    "sleeping",
+                    f"Venter {self._settings.poll_interval_seconds} sekunder til næste polling.",
+                )
             time.sleep(self._settings.poll_interval_seconds)
 
     def run_once(self) -> None:

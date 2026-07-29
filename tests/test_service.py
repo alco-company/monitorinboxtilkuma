@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from monitorinbox2kuma.config import Settings
 from monitorinbox2kuma.models import MailMessage
 from monitorinbox2kuma.service import BackupMonitorService
@@ -24,6 +26,14 @@ class FakeKumaClient:
 
     def push_status(self, *, status: str, message: str, job_name=None, ping=None) -> None:
         self.pushes.append((status, message, job_name, ping))
+
+
+class FailingGraphClient:
+    def fetch_messages(self, *, since, limit):
+        raise RuntimeError("graph exploded")
+
+    def delete_message(self, message_id: str) -> None:
+        raise AssertionError("delete_message should not be called")
 
 
 def make_settings(state_path: Path) -> Settings:
@@ -95,3 +105,25 @@ def test_service_deletes_processed_relevant_messages(tmp_path) -> None:
     assert graph.deleted_message_ids == ["message-1"]
     assert kuma.pushes[0][0] == "up"
     assert kuma.pushes[0][2] == "Hyper Backup task completed successfully"
+
+
+def test_service_keeps_running_after_cycle_error_in_daemon_mode(tmp_path, monkeypatch) -> None:
+    state_path = tmp_path / "state.json"
+    settings = make_settings(state_path)
+    settings = Settings(**{**settings.__dict__, "once": False, "poll_interval_seconds": 30})
+    service = BackupMonitorService(settings, graph_client=FailingGraphClient(), kuma_client=FakeKumaClient())
+
+    class StopLoop(Exception):
+        pass
+
+    def stop_sleep(seconds: int) -> None:
+        raise StopLoop()
+
+    monkeypatch.setattr("monitorinbox2kuma.service.time.sleep", stop_sleep)
+
+    with pytest.raises(StopLoop):
+        service.run()
+
+    snapshot = service._runtime_status.snapshot()
+    assert snapshot.phase == "error"
+    assert snapshot.last_error == "graph exploded"

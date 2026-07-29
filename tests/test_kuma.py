@@ -1,7 +1,11 @@
 from pathlib import Path
 
+import pytest
+import socketio
+
 from monitorinbox2kuma.config import Settings
 from monitorinbox2kuma.kuma import (
+    KumaProvisioner,
     build_kuma_push_url,
     build_push_monitor_payload,
     normalize_kuma_base_url,
@@ -79,3 +83,20 @@ def test_render_monitor_name_uses_job_name_template() -> None:
     monitor_name = render_monitor_name(make_settings(), "M365 NordTHY A/S")
 
     assert monitor_name == "Synology Backup - M365 NordTHY A/S"
+
+
+class TimeoutSocket:
+    def call(self, event, payload, timeout):
+        raise socketio.exceptions.TimeoutError()
+
+
+def test_kuma_timeout_message_is_actionable() -> None:
+    provisioner = KumaProvisioner(make_settings())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        provisioner._call_with_timeout(TimeoutSocket(), "loginByToken", "token")  # type: ignore[arg-type]
+
+    message = str(exc_info.value)
+    assert "loginByToken" in message
+    assert "KUMA_JWT_TOKEN" in message
+    assert "KUMA_USERNAME" in message

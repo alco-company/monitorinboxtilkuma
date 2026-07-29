@@ -83,7 +83,13 @@ class KumaProvisioner:
         self._register_handlers(sio)
 
         try:
-            sio.connect(base_url, wait_timeout=self._settings.kuma_timeout_seconds, socketio_path="socket.io")
+            try:
+                sio.connect(base_url, wait_timeout=self._settings.kuma_timeout_seconds, socketio_path="socket.io")
+            except socketio.exceptions.ConnectionError as exc:
+                raise RuntimeError(
+                    "Could not connect to Uptime Kuma over Socket.IO. "
+                    "Check KUMA_BASE_URL and make sure any reverse proxy allows WebSocket traffic."
+                ) from exc
             self._login(sio)
             self._monitor_list_ready.wait(timeout=self._settings.kuma_timeout_seconds)
 
@@ -133,10 +139,17 @@ class KumaProvisioner:
 
     def _login(self, sio: socketio.Client) -> None:
         if self._settings.kuma_jwt_token:
-            response = self._login_by_token(sio, self._settings.kuma_jwt_token)
-            if response.get("ok"):
-                return
-            LOGGER.warning("Kuma token login failed, falling back to password login if configured.")
+            try:
+                response = self._login_by_token(sio, self._settings.kuma_jwt_token)
+                if response.get("ok"):
+                    return
+                LOGGER.warning("Kuma token login failed, falling back to password login if configured.")
+            except RuntimeError:
+                if not (self._settings.kuma_username and self._settings.kuma_password):
+                    raise
+                LOGGER.warning(
+                    "Kuma token login timed out, falling back to username/password login because it is configured."
+                )
 
         if not self._settings.kuma_username or not self._settings.kuma_password:
             raise RuntimeError("Kuma JWT login failed and no username/password fallback is configured.")
@@ -155,16 +168,29 @@ class KumaProvisioner:
             raise RuntimeError(f"Kuma login failed: {response}")
 
     def _login_by_token(self, sio: socketio.Client, jwt_token: str) -> Dict[str, Any]:
-        response = sio.call("loginByToken", jwt_token, timeout=self._settings.kuma_timeout_seconds)
+        response = self._call_with_timeout(sio, "loginByToken", jwt_token)
         if response.get("ok"):
             return response
 
-        alt_response = sio.call(
+        alt_response = self._call_with_timeout(
+            sio,
             "loginByToken",
             {"jwtToken": jwt_token},
-            timeout=self._settings.kuma_timeout_seconds,
         )
         return alt_response
+
+    def _call_with_timeout(self, sio: socketio.Client, event: str, payload: Any) -> Dict[str, Any]:
+        try:
+            response = sio.call(event, payload, timeout=self._settings.kuma_timeout_seconds)
+        except socketio.exceptions.TimeoutError as exc:
+            raise RuntimeError(
+                f"Timed out while calling Uptime Kuma event '{event}'. "
+                "If you use KUMA_JWT_TOKEN, it may be expired or blocked by a reverse proxy without WebSocket support. "
+                "Try a direct internal KUMA_BASE_URL or configure KUMA_USERNAME and KUMA_PASSWORD as fallback."
+            ) from exc
+        if not isinstance(response, dict):
+            raise RuntimeError(f"Uptime Kuma returned an invalid response for event '{event}': {response!r}")
+        return response
 
     def _create_monitor(self, sio: socketio.Client, *, monitor_name: str, description: Optional[str]) -> int:
         payload = build_push_monitor_payload(self._settings, monitor_name=monitor_name, description=description)
