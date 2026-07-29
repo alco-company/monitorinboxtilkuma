@@ -6,6 +6,7 @@ import socketio
 from monitorinbox2kuma.config import Settings
 from monitorinbox2kuma.kuma import (
     KumaProvisioner,
+    build_push_token,
     build_kuma_push_url,
     build_push_monitor_payload,
     normalize_kuma_base_url,
@@ -70,10 +71,12 @@ def test_build_push_monitor_payload_creates_push_monitor_defaults() -> None:
         make_settings(),
         monitor_name="Synology Backup - ABB Teksam-Default @ adslthi.alco.dk",
         description="Managed by monitorinbox2kuma for ABB Teksam-Default @ adslthi.alco.dk",
+        push_token="abc123token",
     )
 
     assert payload["type"] == "push"
     assert payload["name"] == "Synology Backup - ABB Teksam-Default @ adslthi.alco.dk"
+    assert payload["pushToken"] == "abc123token"
     assert payload["interval"] == 93600
     assert payload["retryInterval"] == 600
     assert payload["accepted_statuscodes"] == ["200-299"]
@@ -92,6 +95,15 @@ def test_render_monitor_name_keeps_short_synology_365_name() -> None:
     assert monitor_name == "Synology 365 backupopgaven ALCO 365"
 
 
+def test_build_push_token_is_stable_for_same_monitor_name() -> None:
+    settings = make_settings()
+    token_a = build_push_token(settings, "Synology 365 backupopgaven ALCO 365")
+    token_b = build_push_token(settings, "Synology 365 backupopgaven ALCO 365")
+
+    assert token_a == token_b
+    assert len(token_a) == 32
+
+
 class TimeoutSocket:
     def call(self, event, payload, timeout):
         raise socketio.exceptions.TimeoutError()
@@ -107,3 +119,43 @@ def test_kuma_timeout_message_is_actionable() -> None:
     assert "loginByToken" in message
     assert "KUMA_JWT_TOKEN" in message
     assert "KUMA_USERNAME" in message
+
+
+class FakeSocket:
+    def __init__(self):
+        self.handlers = {}
+
+    def on(self, event):
+        def decorator(func):
+            self.handlers[event] = func
+            return func
+        return decorator
+
+    def connect(self, *args, **kwargs):
+        monitor_list_handler = self.handlers["monitorList"]
+        monitor_list_handler({"7": {"id": 7, "name": "Synology 365 backupopgaven ALCO 365", "type": "push"}})
+
+    def call(self, event, payload, timeout):
+        if event == "loginByToken":
+            return {"ok": True}
+        if event == "getMonitor":
+            return {"ok": True, "monitor": {"id": 7, "type": "push"}}
+        raise AssertionError(f"Unexpected event: {event}")
+
+    def disconnect(self):
+        return None
+
+
+def test_existing_monitor_falls_back_to_deterministic_push_token_when_missing_from_kuma_response() -> None:
+    settings = make_settings()
+    provisioner = KumaProvisioner(settings, socket_factory=lambda **kwargs: FakeSocket())
+
+    push_url = provisioner.ensure_push_monitor(
+        monitor_name="Synology 365 backupopgaven ALCO 365",
+        description=None,
+    )
+
+    assert push_url == build_kuma_push_url(
+        settings.kuma_base_url,
+        build_push_token(settings, "Synology 365 backupopgaven ALCO 365"),
+    )

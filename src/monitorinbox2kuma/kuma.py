@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import threading
 from typing import Any, Callable, Dict, Optional
@@ -30,6 +32,17 @@ def build_kuma_push_url(base_url: str, push_token: str) -> str:
     return f"{normalize_kuma_base_url(base_url)}/api/push/{push_token}"
 
 
+def build_push_token(settings: Settings, monitor_name: str) -> str:
+    seed = f"{settings.mailbox}\n{monitor_name}\n{settings.kuma_base_url or ''}"
+    secret = (
+        settings.kuma_jwt_token
+        or settings.kuma_password
+        or settings.client_secret
+    )
+    digest = hmac.new(secret.encode("utf-8"), seed.encode("utf-8"), hashlib.sha256).hexdigest()
+    return digest[:32]
+
+
 def render_monitor_name(settings: Settings, job_name: str) -> str:
     if (
         settings.kuma_monitor_name_template == "Synology Backup - {job_name}"
@@ -45,11 +58,18 @@ def render_monitor_description(settings: Settings, job_name: str) -> Optional[st
     return settings.kuma_monitor_description_template.format(job_name=job_name, mailbox=settings.mailbox)
 
 
-def build_push_monitor_payload(settings: Settings, *, monitor_name: str, description: Optional[str]) -> Dict[str, Any]:
+def build_push_monitor_payload(
+    settings: Settings,
+    *,
+    monitor_name: str,
+    description: Optional[str],
+    push_token: str,
+) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "type": "push",
         "name": monitor_name,
         "description": description,
+        "pushToken": push_token,
         "interval": settings.kuma_monitor_interval_seconds,
         "retryInterval": settings.kuma_monitor_retry_interval_seconds,
         "resendInterval": settings.kuma_monitor_resend_interval_seconds,
@@ -99,8 +119,15 @@ class KumaProvisioner:
             self._monitor_list_ready.wait(timeout=self._settings.kuma_timeout_seconds)
 
             monitor = self._find_monitor_by_name(monitor_name)
+            expected_push_token = build_push_token(self._settings, monitor_name)
             if monitor is None:
-                monitor_id = self._create_monitor(sio, monitor_name=monitor_name, description=description)
+                self._create_monitor(
+                    sio,
+                    monitor_name=monitor_name,
+                    description=description,
+                    push_token=expected_push_token,
+                )
+                return build_kuma_push_url(base_url, expected_push_token)
             else:
                 if monitor.get("type") != "push":
                     raise RuntimeError(
@@ -109,7 +136,7 @@ class KumaProvisioner:
                 monitor_id = int(monitor["id"])
 
             full_monitor = self._get_monitor(sio, monitor_id)
-            push_token = full_monitor.get("pushToken")
+            push_token = full_monitor.get("pushToken") or expected_push_token
             if not push_token:
                 raise RuntimeError("Kuma monitor was found or created, but no pushToken was returned.")
 
@@ -197,8 +224,20 @@ class KumaProvisioner:
             raise RuntimeError(f"Uptime Kuma returned an invalid response for event '{event}': {response!r}")
         return response
 
-    def _create_monitor(self, sio: socketio.Client, *, monitor_name: str, description: Optional[str]) -> int:
-        payload = build_push_monitor_payload(self._settings, monitor_name=monitor_name, description=description)
+    def _create_monitor(
+        self,
+        sio: socketio.Client,
+        *,
+        monitor_name: str,
+        description: Optional[str],
+        push_token: str,
+    ) -> int:
+        payload = build_push_monitor_payload(
+            self._settings,
+            monitor_name=monitor_name,
+            description=description,
+            push_token=push_token,
+        )
         response = sio.call("add", payload, timeout=self._settings.kuma_timeout_seconds)
         if not response.get("ok"):
             raise RuntimeError(f"Failed to create Kuma monitor: {response}")
