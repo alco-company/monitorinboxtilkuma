@@ -21,6 +21,7 @@ def make_settings() -> Settings:
         client_secret="secret",
         mailbox="monitor@al.dk",
         mail_folder="inbox",
+        processed_folder_name="Behandlet af Monitor til Kume",
         allowed_senders=[],
         success_patterns=[r"success"],
         failure_patterns=[r"failed"],

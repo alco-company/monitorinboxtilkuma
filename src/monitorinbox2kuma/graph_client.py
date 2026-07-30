@@ -22,6 +22,7 @@ class GraphClient:
             client_credential=settings.client_secret,
         )
         self._session = requests.Session()
+        self._processed_folder_id: Optional[str] = None
 
     def _access_token(self) -> str:
         token_result = self._app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
@@ -30,21 +31,29 @@ class GraphClient:
             raise RuntimeError(f"Unable to acquire Microsoft Graph access token: {token_result}")
         return access_token
 
-    def delete_message(self, message_id: str) -> None:
+    def move_message(self, message_id: str) -> None:
         access_token = self._access_token()
-        url = f"https://graph.microsoft.com/v1.0/users/{self._settings.mailbox}/messages/{message_id}"
+        destination_id = self._processed_destination_folder_id(access_token)
+        url = f"https://graph.microsoft.com/v1.0/users/{self._settings.mailbox}/messages/{message_id}/move"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
+            "Content-Type": "application/json",
         }
 
-        response = self._session.delete(
+        response = self._session.post(
             url,
+            json={"destinationId": destination_id},
             headers=headers,
             timeout=self._settings.graph_timeout_seconds,
         )
         response.raise_for_status()
-        LOGGER.info("Deleted processed message '%s' from mailbox '%s'.", message_id, self._settings.mailbox)
+        LOGGER.info(
+            "Moved processed message '%s' to '%s' in mailbox '%s'.",
+            message_id,
+            self._settings.processed_folder_name,
+            self._settings.mailbox,
+        )
 
     def fetch_messages(self, *, since: Optional[datetime], limit: int) -> List[MailMessage]:
         access_token = self._access_token()
@@ -113,3 +122,50 @@ class GraphClient:
             )
 
         return messages
+
+    def _processed_destination_folder_id(self, access_token: str) -> str:
+        if self._processed_folder_id:
+            return self._processed_folder_id
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        }
+        folder_name = self._settings.processed_folder_name
+        base_url = (
+            "https://graph.microsoft.com/v1.0/"
+            f"users/{self._settings.mailbox}/mailFolders/{self._settings.mail_folder}/childFolders"
+        )
+
+        response = self._session.get(
+            base_url,
+            params={
+                "$top": 100,
+                "$select": "id,displayName",
+            },
+            headers=headers,
+            timeout=self._settings.graph_timeout_seconds,
+        )
+        response.raise_for_status()
+
+        for item in response.json().get("value", []):
+            if (item.get("displayName") or "").strip().casefold() == folder_name.casefold():
+                self._processed_folder_id = item["id"]
+                return self._processed_folder_id
+
+        create_response = self._session.post(
+            base_url,
+            json={"displayName": folder_name},
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=self._settings.graph_timeout_seconds,
+        )
+        create_response.raise_for_status()
+        folder_id = create_response.json()["id"]
+        self._processed_folder_id = folder_id
+        LOGGER.info(
+            "Created processed mail folder '%s' under '%s' for mailbox '%s'.",
+            folder_name,
+            self._settings.mail_folder,
+            self._settings.mailbox,
+        )
+        return folder_id

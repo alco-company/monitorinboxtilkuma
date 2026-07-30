@@ -95,6 +95,7 @@ class Settings:
     client_secret: str
     mailbox: str
     mail_folder: str
+    processed_folder_name: str
     allowed_senders: List[str]
     success_patterns: List[str]
     failure_patterns: List[str]
@@ -211,6 +212,10 @@ def load_settings(*, once: bool = False) -> Settings:
         client_secret=required["M365_CLIENT_SECRET"],
         mailbox=mailbox,
         mail_folder=os.getenv("M365_MAIL_FOLDER", "inbox").strip() or "inbox",
+        processed_folder_name=(
+            os.getenv("M365_PROCESSED_FOLDER", "Behandlet af Monitor til Kume").strip()
+            or "Behandlet af Monitor til Kume"
+        ),
         allowed_senders=_parse_csv_env("M365_ALLOWED_SENDERS"),
         success_patterns=_parse_patterns("SUCCESS_PATTERNS", DEFAULT_SUCCESS_PATTERNS),
         failure_patterns=_parse_patterns("FAILURE_PATTERNS", DEFAULT_FAILURE_PATTERNS),

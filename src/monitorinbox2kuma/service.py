@@ -92,7 +92,7 @@ class BackupMonitorService:
         relevant.sort(key=lambda item: item.received_at)
         self._runtime_status.record_fetch(total_messages=len(messages), relevant_messages=len(relevant))
         processed_count = 0
-        deleted_message_ids: set[str] = set()
+        processed_message_ids: set[str] = set()
 
         if not state.processed_message_ids and relevant:
             latest = relevant[-1]
@@ -116,10 +116,10 @@ class BackupMonitorService:
                 state.remember_message(message.message_id)
                 state.record_processed_message(message, processed_at=datetime.now(timezone.utc))
                 processed_count += 1
-                deleted_message_ids.add(message.message_id)
-                self._delete_processed_message(message)
+                processed_message_ids.add(message.message_id)
+                self._archive_processed_message(message)
 
-            remaining_messages = [message for message in messages if message.message_id not in deleted_message_ids]
+            remaining_messages = [message for message in messages if message.message_id not in processed_message_ids]
             self._runtime_status.update_inbox_messages([_mail_preview(message) for message in remaining_messages[:10]])
             state.save(self._settings.state_file)
             self._runtime_status.complete_cycle(
@@ -145,22 +145,22 @@ class BackupMonitorService:
             state.remember_message(message.message_id)
             state.record_processed_message(message, processed_at=datetime.now(timezone.utc))
             processed_count += 1
-            deleted_message_ids.add(message.message_id)
+            processed_message_ids.add(message.message_id)
 
             if parsed is None:
                 LOGGER.info("Skipped message '%s' because no status pattern matched.", message.subject)
-                self._delete_processed_message(message)
+                self._archive_processed_message(message)
                 continue
 
             self._push_result(state=state, parsed=parsed)
-            self._delete_processed_message(message)
+            self._archive_processed_message(message)
 
         if not messages:
             LOGGER.info("No new messages found in mailbox '%s'.", self._settings.mailbox)
         elif processed_count == 0:
             LOGGER.info("No unprocessed relevant messages found.")
 
-        remaining_messages = [message for message in messages if message.message_id not in deleted_message_ids]
+        remaining_messages = [message for message in messages if message.message_id not in processed_message_ids]
         self._runtime_status.update_inbox_messages([_mail_preview(message) for message in remaining_messages[:10]])
         state.save(self._settings.state_file)
         if not messages:
@@ -182,14 +182,16 @@ class BackupMonitorService:
         state.last_pushed_summary = parsed.summary
         state.last_pushed_at = now
 
-    def _delete_processed_message(self, message: MailMessage) -> None:
+    def _archive_processed_message(self, message: MailMessage) -> None:
         try:
-            self._graph.delete_message(message.message_id)
+            self._graph.move_message(message.message_id)
         except Exception:
             LOGGER.warning(
-                "Processed message '%s' could not be deleted from Inbox. "
-                "Check that the app has Mail.ReadWrite and mailbox delete rights.",
+                "Processed message '%s' could not be moved from '%s' to '%s'. "
+                "Check that the app has Mail.ReadWrite and mailbox move rights.",
                 message.subject or message.message_id,
+                self._settings.mail_folder,
+                self._settings.processed_folder_name,
                 exc_info=True,
             )
 

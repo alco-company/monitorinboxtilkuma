@@ -54,6 +54,7 @@ Copy `.env.example` to `.env` and fill in the values.
 Important variables:
 
 - `M365_MAILBOX`: mailbox to monitor
+- `M365_PROCESSED_FOLDER`: subfolder under `M365_MAIL_FOLDER` where processed emails are moved, default `Behandlet af Monitor til Kume`
 - `M365_ALLOWED_SENDERS`: comma-separated list of senders that are allowed
 - `KUMA_PUSH_URL`: Push URL from Uptime Kuma when using manual mode
 - `KUMA_AUTO_CREATE_MONITOR`: set to `true` to let the service create or reuse the monitor itself
@@ -136,7 +137,7 @@ If the built-in monitor page is enabled, Docker exposes it on `http://localhost:
 - Later runs: only new emails are processed.
 - If an email does not match your patterns, it is ignored.
 - In auto-create mode, the service creates or reuses one Push monitor per parsed backup job.
-- After a relevant email is processed, the service deletes it from Inbox by calling Microsoft Graph `DELETE /users/{mailbox}/messages/{id}`. In Exchange Online this removes it from Inbox rather than using the separate `permanentDelete` action.
+- After a relevant email is processed, the service moves it to the configured subfolder under `M365_MAIL_FOLDER`. By default that folder is `Behandlet af Monitor til Kume`.
 
 ## Production tips
 

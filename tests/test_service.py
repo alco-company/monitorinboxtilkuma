@@ -12,13 +12,13 @@ from monitorinbox2kuma.state import State
 class FakeGraphClient:
     def __init__(self, messages):
         self.messages = list(messages)
-        self.deleted_message_ids = []
+        self.moved_message_ids = []
 
     def fetch_messages(self, *, since, limit):
         return list(self.messages)
 
-    def delete_message(self, message_id: str) -> None:
-        self.deleted_message_ids.append(message_id)
+    def move_message(self, message_id: str) -> None:
+        self.moved_message_ids.append(message_id)
 
 
 class FakeKumaClient:
@@ -33,8 +33,8 @@ class FailingGraphClient:
     def fetch_messages(self, *, since, limit):
         raise RuntimeError("graph exploded")
 
-    def delete_message(self, message_id: str) -> None:
-        raise AssertionError("delete_message should not be called")
+    def move_message(self, message_id: str) -> None:
+        raise AssertionError("move_message should not be called")
 
 
 def make_settings(state_path: Path) -> Settings:
@@ -44,6 +44,7 @@ def make_settings(state_path: Path) -> Settings:
         client_secret="secret",
         mailbox="monitor@al.dk",
         mail_folder="inbox",
+        processed_folder_name="Behandlet af Monitor til Kume",
         allowed_senders=["alerts@synology.local"],
         success_patterns=[r"completed successfully"],
         failure_patterns=[r"\bfailed\b"],
@@ -96,7 +97,7 @@ def make_message(
     )
 
 
-def test_service_deletes_processed_relevant_messages(tmp_path) -> None:
+def test_service_moves_processed_relevant_messages(tmp_path) -> None:
     state_path = tmp_path / "state.json"
     graph = FakeGraphClient([make_message()])
     kuma = FakeKumaClient()
@@ -104,7 +105,7 @@ def test_service_deletes_processed_relevant_messages(tmp_path) -> None:
 
     service.run_once()
 
-    assert graph.deleted_message_ids == ["message-1"]
+    assert graph.moved_message_ids == ["message-1"]
     assert kuma.pushes[0][0] == "up"
     assert kuma.pushes[0][2] == "Hyper Backup task completed successfully"
     snapshot = service._runtime_status.snapshot()
